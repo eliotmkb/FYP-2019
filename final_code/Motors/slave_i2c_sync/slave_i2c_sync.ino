@@ -1,30 +1,37 @@
 #include <Wire.h>
+byte ledPin = 13;
 
+//Important for communicating with the motor controller
 byte directionPin = 9;
 byte stepPin = 8;
+
 int numberOfSteps = 0; //ONLY WORKS WITH NBOFSTEPS > 1124
-int iterations;
-const int arrsz = 41;     //Number of steps it takes for ∂f/∂x to reach 1 
-const int exp_inc = 10;   //what speed value is reached after arrsz steps 
-byte ledPin = 13;
+int iterations;        //Number of iterations before motor changes motion profile
+
+//The following 2 variables have to be recalculated if a different Logistic function is used
+const int arrsz = 41;     //Number of steps in the exponential stages (at the end of those stages, the speed variation has a gradient of 1)
+const int exp_inc = 10;   //After the 41 steps of exponential variation, the speed will have changed by this much 
+
+//Minspeed is the same always but maxspeed gets overwritten with the data coming from master
 const int minspeed = 1000;
 int maxspeed = 300;
+
+//mods changes when new data is received
 bool mods = false;
+
+//zoom is actually speed, sorry speed cant be used and I thought calling it zoom was funny
 int zoom = 0;
+
 int Sa[arrsz];  //Array starting at low speed
 int Sb[arrsz];  //Array finishing at high speed
 
-//tn determine the steps at which we switch between linear/exponential growth
+//time_array determines the steps at which we switch between linear/exponential growth
 int time_array[6] = {0, 0, 0, 0, 0, 0};
-
-//int time_array[0] = arrsz;
-//int time_array[1] = arrsz + (minspeed-maxspeed) - 2*exp_inc;
-//int time_array[2] = time_array[1] + arrsz;
 
   
 void setup() 
 { 
-
+  //Just some set ups
   Serial.begin(9600);
   Serial.println("Starting Stepper");
   digitalWrite(ledPin, LOW);
@@ -32,9 +39,11 @@ void setup()
   pinMode(directionPin, OUTPUT);
   pinMode(stepPin, OUTPUT);
 
+  //Wire.begin sets the slave address and .onReceive says what function to call when data is recieved form master
   Wire.begin(9);
   Wire.onReceive(receiveEvent);
 
+  //Creating the intial exponential variation arrays (contains the exact speed (zoom) values for all the 41 steps)
   Serial.println("Creating arrays");
   //USING 500/1+exp(-0.1(x-80))
   for(int i = 0; i < arrsz; i++){
@@ -50,19 +59,25 @@ void setup()
 
 void loop() 
 { 
+  //Only move the motors when new data is recieved from the master, check using mods
   if (mods){
     amp_change();
     mods =  false;
 
+    //Loop for specefied number of iterations
     for(int i = 0; i < iterations; i++){
-      digitalWrite(directionPin, HIGH);
-      zoom = minspeed;
+      digitalWrite(directionPin, HIGH);             //CW or CCW
+      zoom = minspeed;                              //Always start at minspeed (for smoothness)
+      
+      //Typical motor controlling for loop
       for (int i = 0; i < numberOfSteps; i++){
+
+        //Create pulse by alternating LOW and HIGH with a delay of zoom
         digitalWrite(stepPin, HIGH);
-        delayMicroseconds(zoom + 4);
+        delayMicroseconds(zoom + 4);                //the +4 relates to the length of the vroomvroom function called after the LOW pulse
         digitalWrite(stepPin, LOW);
         delayMicroseconds(zoom);
-        zoom = vroomvroom(i, time_array);
+        zoom = vroomvroom(i, time_array);           //Allocate new speed value
         //Serial.println(zoom);
         }
       delayMicroseconds(4);
@@ -81,7 +96,7 @@ void loop()
   //delayMicroseconds(4);
 }
 
-//Sets speed depending on step interval in which we are
+//Sets speed depending on step interval in which we are (sorry again for the name)
 int vroomvroom(int i, int t[]){
   if (i < t[0]){    //1st exponential (slow) increase from minspeed
       zoom = Sa[i];
@@ -107,6 +122,7 @@ int vroomvroom(int i, int t[]){
       return zoom;
   }
 
+//This function edits the time_array depending on the new incoming value of numberOfSteps
 void time_array_mod(int t[], int exp_inc, int maxspeed, int arrsz, int minspeed, int numberOfSteps){
   t[0] = arrsz;
   t[1] = arrsz + (minspeed-maxspeed) - 2*exp_inc;
@@ -116,12 +132,15 @@ void time_array_mod(int t[], int exp_inc, int maxspeed, int arrsz, int minspeed,
   t[3] = t[4] - arrsz;
   }
 
+//This function edits the second exponential array depending on the new incoming value of maxspeed
+//The first array never changes since it only depends on minspeed
  void exp_array_mod(int arrsz, int maxspeed, int Sb[]){
   for(int i = 0; i < arrsz; i++){
     Sb[i] = round(-500/(1+exp(-0.1*(160-(arrsz-i) - 80))) + (500+maxspeed));
     }
   }
 
+//This function reads the new values of numberOfSteps, maxspeed, and iterations from the master
  void amp_change(){
     Serial.println("config changes");
     numberOfSteps = Wire.read();
@@ -134,6 +153,7 @@ void time_array_mod(int t[], int exp_inc, int maxspeed, int arrsz, int minspeed,
     exp_array_mod(arrsz, maxspeed, Sb);
   }
 
-  void receiveEvent(int bytes){
+ //Wire.onReceive interrupt
+ void receiveEvent(int bytes){
     mods = true;
     }
